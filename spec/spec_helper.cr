@@ -1,2 +1,2 @@
 require "spec"
-require "../src/pinyin-cr"
+require "../src/pinyin"

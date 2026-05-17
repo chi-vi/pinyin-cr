@@ -1,4 +1,4 @@
-# pinyin-cr
+# pinyin
 
 A lightning-fast, robust Crystal binding to **libpinyin**, designed for sentence-based intelligent Chinese Pinyin conversion.
 
@@ -17,6 +17,7 @@ It parses and segments Chinese phrases using `libpinyin`'s advanced linguistic d
 You must have `libpinyin` and `glib-2.0` libraries and their development headers installed on your system.
 
 ### Ubuntu / Debian
+
 ```bash
 sudo apt-get install libpinyin15 libpinyin15-dev libpinyin-data pkg-config
 ```
@@ -27,8 +28,8 @@ sudo apt-get install libpinyin15 libpinyin15-dev libpinyin-data pkg-config
 
    ```yaml
    dependencies:
-     pinyin-cr:
-       github: your-github-user/pinyin-cr
+     pinyin:
+       github: chi-vi/pinyin-cr
    ```
 
 2. Run `shards install`
@@ -36,7 +37,7 @@ sudo apt-get install libpinyin15 libpinyin15-dev libpinyin-data pkg-config
 ## Usage
 
 ```crystal
-require "pinyin-cr"
+require "pinyin"
 
 # 1. Standard Conversion
 Pinyin.to_pinyin("北京大学")
@@ -98,7 +99,7 @@ Pinyin.to_pinyin(
 ```
 
 > [!NOTE]
-> `user_dir` must be a directory path. `libpinyin` expects a configuration file named `user.conf` to reside inside this directory. If it doesn't exist, the `pinyin-cr` library will **automatically and silently initialize an empty `user.conf` for you** to avoid any warning printouts to stdout/stderr.
+> `user_dir` must be a directory path. `libpinyin` expects a configuration file named `user.conf` to reside inside this directory. If it doesn't exist, the `pinyin` library will **automatically and silently initialize an empty `user.conf` for you** to avoid any warning printouts to stdout/stderr.
 
 ## Development & Testing
 

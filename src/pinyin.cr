@@ -57,7 +57,7 @@ module Pinyin
       when 'ū', 'ú', 'ǔ', 'ù' then 'u'
       when 'ü', 'ǘ', 'ǚ', 'ǜ' then 'v' # Match libpinyin's spelling 'v' for ü/u-umlaut
       when 'ń', 'ň'           then 'n'
-      else c
+      else                         c
       end
     }.join
   end
@@ -86,17 +86,17 @@ module Pinyin
   # Converts Chinese text into a formatted Pinyin string.
   #
   # ```
-  # Pinyin.to_pinyin("北京大学") # => "bei jing da xue"
+  # Pinyin.to_pinyin("北京大学")       # => "bei jing da xue"
   # Pinyin.to_pinyin("你好, World!") # => "ni hao , World!"
   # ```
   def self.to_pinyin(zh_text : String, separator : String = " ", system_dir : String = @@system_dir, user_dir : String = @@user_dir) : String
     elements = to_pinyin_array(zh_text, system_dir, user_dir)
     pinyin_results = [] of String
-    
+
     elements.each do |element|
       pinyin_results << element.pinyin
     end
-    
+
     joined = pinyin_results.join(separator)
     if separator == " "
       joined = joined.gsub(/\s+/, " ").strip
@@ -243,7 +243,7 @@ module Pinyin
             (0...garray.len).each do |k|
               key_ptr = chewing_keys + k
               char_str = chars[k]?.try(&.to_s) || ""
-              
+
               if LibPinyin.pinyin_get_pinyin_string(instance, key_ptr, out pinyin_str_ptr)
                 pinyin_str = String.new(pinyin_str_ptr)
                 LibGLib.g_free(pinyin_str_ptr.as(Void*))
