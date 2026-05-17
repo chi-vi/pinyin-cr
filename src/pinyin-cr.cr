@@ -12,6 +12,29 @@ module Pinyin
   class_property system_dir : String = "/usr/lib/x86_64-linux-gnu/libpinyin/data"
   class_property user_dir : String = File.join(ENV["HOME"]? || "/tmp", ".local", "share", "pinyin-cr")
 
+  # Configure dictionary path globally. Default is relative to the library's directory on disk.
+  class_property dict_path : String = File.join({{__DIR__}}, "pinyin_dict.txt")
+
+  # Lazily loaded disk-based dictionary
+  @@dict : Hash(String, String)? = nil
+
+  protected def self.dict : Hash(String, String)
+    @@dict ||= load_dict
+  end
+
+  private def self.load_dict : Hash(String, String)
+    d = Hash(String, String).new(initial_capacity: 42000)
+    if File.exists?(dict_path)
+      File.each_line(dict_path, chomp: true) do |line|
+        parts = line.split('\t', limit: 2)
+        if parts.size == 2
+          d[parts[0]] = parts[1]
+        end
+      end
+    end
+    d
+  end
+
   # Represents a segmented unit of text with its Pinyin translation.
   # If a segmented unit does not have a Pinyin translation (e.g., punctuation or English),
   # the `pinyin` field will contain the original `text` itself.
@@ -21,6 +44,38 @@ module Pinyin
 
     def initialize(@text : String, @pinyin : String)
     end
+  end
+
+  # Helper to convert a toned Pinyin to toneless
+  protected def self.to_toneless(pinyin : String) : String
+    pinyin.each_char.map { |c|
+      case c
+      when 'ā', 'á', 'ǎ', 'à' then 'a'
+      when 'ē', 'é', 'ě', 'è' then 'e'
+      when 'ō', 'ó', 'ǒ', 'ò' then 'o'
+      when 'ī', 'í', 'ǐ', 'ì' then 'i'
+      when 'ū', 'ú', 'ǔ', 'ù' then 'u'
+      when 'ü', 'ǘ', 'ǚ', 'ǜ' then 'v' # Match libpinyin's spelling 'v' for ü/u-umlaut
+      when 'ń', 'ň'           then 'n'
+      else c
+      end
+    }.join
+  end
+
+  # Helper to get pinyin with tone mark
+  protected def self.get_tone_marked_pinyin(char : String, toneless_pinyin : String) : String
+    if dict_pinyins = dict[char]?
+      candidates = dict_pinyins.split(',')
+      candidates.each do |cand|
+        if to_toneless(cand) == toneless_pinyin
+          return cand
+        end
+      end
+      # If none matched perfectly (unlikely, but fallback), return the first one
+      return candidates[0]
+    end
+    # Fallback to toneless if the character is not in our dictionary
+    toneless_pinyin
   end
 
   # Helper to identify Chinese characters (CJK Unified Ideographs).
@@ -192,7 +247,8 @@ module Pinyin
               if LibPinyin.pinyin_get_pinyin_string(instance, key_ptr, out pinyin_str_ptr)
                 pinyin_str = String.new(pinyin_str_ptr)
                 LibGLib.g_free(pinyin_str_ptr.as(Void*))
-                results << Element.new(char_str, pinyin_str)
+                pinyin_str_marked = get_tone_marked_pinyin(char_str, pinyin_str)
+                results << Element.new(char_str, pinyin_str_marked)
               else
                 results << Element.new(char_str, char_str)
               end

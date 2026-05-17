@@ -2,19 +2,19 @@ require "./spec_helper"
 
 describe Pinyin do
   it "converts a simple Chinese phrase to Pinyin string" do
-    Pinyin.to_pinyin("北京大学").should eq("bei jing da xue")
+    Pinyin.to_pinyin("北京大学").should eq("běi jīng dà xué")
   end
 
   it "converts mixed Chinese and English text" do
-    Pinyin.to_pinyin("你好, World!").should eq("ni hao , World!")
+    Pinyin.to_pinyin("你好, World!").should eq("nǐ hǎo , World!")
   end
 
   it "converts mixed text with full-width Chinese punctuation" do
-    Pinyin.to_pinyin("你好，世界！ Hello World!").should eq("ni hao ， shi jie ！ Hello World!")
+    Pinyin.to_pinyin("你好，世界！ Hello World!").should eq("nǐ hǎo ， shì jiè ！ Hello World!")
   end
 
   it "supports custom separators" do
-    Pinyin.to_pinyin("北京大学", separator: "-").should eq("bei-jing-da-xue")
+    Pinyin.to_pinyin("北京大学", separator: "-").should eq("běi-jīng-dà-xué")
   end
 
   describe "global configuration" do
@@ -34,13 +34,13 @@ describe Pinyin do
       elements = Pinyin.to_pinyin_array("北京大学")
       elements.size.should eq(4)
       elements[0].text.should eq("北")
-      elements[0].pinyin.should eq("bei")
+      elements[0].pinyin.should eq("běi")
       elements[1].text.should eq("京")
-      elements[1].pinyin.should eq("jing")
+      elements[1].pinyin.should eq("jīng")
       elements[2].text.should eq("大")
-      elements[2].pinyin.should eq("da")
+      elements[2].pinyin.should eq("dà")
       elements[3].text.should eq("学")
-      elements[3].pinyin.should eq("xue")
+      elements[3].pinyin.should eq("xué")
     end
 
     it "maps non-Chinese characters to elements with original text as pinyin" do
@@ -48,9 +48,9 @@ describe Pinyin do
       # Should be: 你, 好, ，World! (3 blocks)
       elements.size.should eq(3)
       elements[0].text.should eq("你")
-      elements[0].pinyin.should eq("ni")
+      elements[0].pinyin.should eq("nǐ")
       elements[1].text.should eq("好")
-      elements[1].pinyin.should eq("hao")
+      elements[1].pinyin.should eq("hǎo")
       elements[2].text.should eq("，World!")
       elements[2].pinyin.should eq("，World!")
     end
