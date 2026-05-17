@@ -1,4 +1,4 @@
-require "./src/pinyin-cr"
+require "./src/pinyin"
 
 puts "Testing Pinyin.to_pinyin..."
 begin

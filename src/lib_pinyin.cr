@@ -33,5 +33,6 @@ lib LibPinyin
   fun pinyin_token_get_nth_pronunciation(instance : PinyinInstanceT, token : PhraseTokenT, nth : LibC::UInt, keys : LibGLib::GArrayStruct*) : Bool
 
   fun pinyin_get_pinyin_string(instance : PinyinInstanceT, key : UInt16*, utf8_str : LibC::Char**) : Bool
+  fun pinyin_get_luoma_pinyin_string(instance : PinyinInstanceT, key : UInt16*, utf8_str : LibC::Char**) : Bool
   fun pinyin_reset(instance : PinyinInstanceT) : Bool
 end

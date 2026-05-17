@@ -12,27 +12,111 @@ module Pinyin
   class_property system_dir : String = "/usr/lib/x86_64-linux-gnu/libpinyin/data"
   class_property user_dir : String = File.join(ENV["HOME"]? || "/tmp", ".local", "share", "pinyin-cr")
 
-  # Configure dictionary path globally. Default is relative to the library's directory on disk.
-  class_property dict_path : String = File.join({{__DIR__}}, "pinyin_dict.txt")
+  # Tone mark tables indexed by tone number (1–4). Index 0 is unused.
+  # Neutral tone (5) uses the bare vowel with no diacritic.
+  TONE_MARKS = {
+    'a' => ['\0', 'ā', 'á', 'ǎ', 'à'],
+    'e' => ['\0', 'ē', 'é', 'ě', 'è'],
+    'i' => ['\0', 'ī', 'í', 'ǐ', 'ì'],
+    'o' => ['\0', 'ō', 'ó', 'ǒ', 'ò'],
+    'u' => ['\0', 'ū', 'ú', 'ǔ', 'ù'],
+    'v' => ['\0', 'ǖ', 'ǘ', 'ǚ', 'ǜ'], # libpinyin uses 'v' for ü/u-umlaut
+  }
 
-  # Lazily loaded disk-based dictionary
-  @@dict : Hash(String, String)? = nil
+  # Raw tone data embedded at compile time — no runtime file I/O.
+  # Format per line: "char\tsyl:tone,syl:tone,..."
+  # Syllable uses 'v' for ü (matching libpinyin's output). Tones: 1–4, 5=neutral.
+  TONE_DATA = {{read_file("#{__DIR__}/pinyin_tones.txt")}}
 
-  protected def self.dict : Hash(String, String)
-    @@dict ||= load_dict
+  # Lazily built lookup: codepoint → "syl:tone,syl:tone,..."
+  @@tone_table : Hash(UInt32, String)? = nil
+
+  protected def self.tone_table : Hash(UInt32, String)
+    @@tone_table ||= begin
+      table = Hash(UInt32, String).new(initial_capacity: 27000)
+      TONE_DATA.each_line(chomp: true) do |line|
+        tab = line.index('\t') || next
+        char_cp = line[0].ord.to_u32
+        entry = line[tab + 1..]
+        table[char_cp] = entry unless entry.empty?
+      end
+      table
+    end
   end
 
-  private def self.load_dict : Hash(String, String)
-    d = Hash(String, String).new(initial_capacity: 42000)
-    if File.exists?(dict_path)
-      File.each_line(dict_path, chomp: true) do |line|
-        parts = line.split('\t', limit: 2)
-        if parts.size == 2
-          d[parts[0]] = parts[1]
-        end
+  # Converts a syllable+tone-number string (e.g. "bei3", "lv4", "xue2") into a
+  # tone-marked pinyin string (e.g. "běi", "lǜ", "xué").
+  #
+  # Tone placement rules (standard Mandarin):
+  #   1. If the syllable has 'a' or 'e', the mark always goes there.
+  #   2. If the syllable has 'ou', the mark goes on 'o'.
+  #   3. Otherwise, the mark goes on the last vowel.
+  protected def self.apply_tone_mark(syllable : String, tone : Int32) : String
+    return syllable.gsub('v', 'ü') if tone == 5 || tone == 0
+
+    vowels = {'a', 'e', 'i', 'o', 'u', 'v'}
+
+    # Rule 1: 'a' or 'e' always takes the mark
+    {'a', 'e'}.each do |vowel|
+      if (idx = syllable.index(vowel))
+        marked = TONE_MARKS[vowel][tone].to_s
+        result = syllable[0...idx] + marked + syllable[idx + 1..]
+        return result.gsub('v', 'ü')
       end
     end
-    d
+
+    # Rule 2: 'ou' → mark 'o'
+    if (idx = syllable.index("ou"))
+      marked = TONE_MARKS['o'][tone].to_s
+      return syllable[0...idx] + marked + syllable[idx + 1..].gsub('v', 'ü')
+    end
+
+    # Rule 3: mark the last vowel
+    last_vowel_idx = -1
+    syllable.each_char.with_index do |c, i|
+      last_vowel_idx = i if vowels.includes?(c)
+    end
+
+    if last_vowel_idx >= 0
+      vowel = syllable[last_vowel_idx]
+      marked = TONE_MARKS[vowel]? ? TONE_MARKS[vowel][tone].to_s : vowel.to_s
+      result = syllable[0...last_vowel_idx] + marked + syllable[last_vowel_idx + 1..]
+      return result.gsub('v', 'ü')
+    end
+
+    syllable.gsub('v', 'ü')
+  end
+
+  # Looks up the tone-marked pinyin for a character given its syllable
+  # (as returned by libpinyin, e.g. "bei" for 北).
+  # For polyphones, the syllable is used to pick the correct pronunciation.
+  protected def self.toned_pinyin(char : String, syllable : String) : String
+    cp = char.chars.first?.try(&.ord.to_u32) || return syllable
+    entry = tone_table[cp]? || return syllable
+
+    # Entry is "syl:tone,syl:tone,..." — find the matching syllable
+    entry.split(',') do |part|
+      colon = part.index(':') || next
+      syl = part[0...colon]
+      next unless syl == syllable
+      tone = part[colon + 1]?.try(&.to_i) || next
+      return apply_tone_mark(syllable, tone)
+    end
+
+    # Fallback: use the first entry regardless of syllable match
+    first = entry.split(',').first
+    if (colon = first.index(':'))
+      syl = first[0...colon]
+      tone = first[colon + 1]?.try(&.to_i) || 5
+      apply_tone_mark(syl, tone)
+    else
+      syllable
+    end
+  end
+
+  # Helper to identify Chinese characters (CJK Unified Ideographs).
+  def self.chinese_char?(char : Char) : Bool
+    char.ord >= 0x4E00 && char.ord <= 0x9FFF
   end
 
   # Represents a segmented unit of text with its Pinyin translation.
@@ -46,48 +130,11 @@ module Pinyin
     end
   end
 
-  # Helper to convert a toned Pinyin to toneless
-  protected def self.to_toneless(pinyin : String) : String
-    pinyin.each_char.map { |c|
-      case c
-      when 'ā', 'á', 'ǎ', 'à' then 'a'
-      when 'ē', 'é', 'ě', 'è' then 'e'
-      when 'ō', 'ó', 'ǒ', 'ò' then 'o'
-      when 'ī', 'í', 'ǐ', 'ì' then 'i'
-      when 'ū', 'ú', 'ǔ', 'ù' then 'u'
-      when 'ü', 'ǘ', 'ǚ', 'ǜ' then 'v' # Match libpinyin's spelling 'v' for ü/u-umlaut
-      when 'ń', 'ň'           then 'n'
-      else                         c
-      end
-    }.join
-  end
-
-  # Helper to get pinyin with tone mark
-  protected def self.get_tone_marked_pinyin(char : String, toneless_pinyin : String) : String
-    if dict_pinyins = dict[char]?
-      candidates = dict_pinyins.split(',')
-      candidates.each do |cand|
-        if to_toneless(cand) == toneless_pinyin
-          return cand
-        end
-      end
-      # If none matched perfectly (unlikely, but fallback), return the first one
-      return candidates[0]
-    end
-    # Fallback to toneless if the character is not in our dictionary
-    toneless_pinyin
-  end
-
-  # Helper to identify Chinese characters (CJK Unified Ideographs).
-  def self.chinese_char?(char : Char) : Bool
-    char.ord >= 0x4E00 && char.ord <= 0x9FFF
-  end
-
   # Converts Chinese text into a formatted Pinyin string.
   #
   # ```
-  # Pinyin.to_pinyin("北京大学")       # => "bei jing da xue"
-  # Pinyin.to_pinyin("你好, World!") # => "ni hao , World!"
+  # Pinyin.to_pinyin("北京大学")       # => "běi jīng dà xué"
+  # Pinyin.to_pinyin("你好, World!") # => "nǐ hǎo , World!"
   # ```
   def self.to_pinyin(zh_text : String, separator : String = " ", system_dir : String = @@system_dir, user_dir : String = @@user_dir) : String
     elements = to_pinyin_array(zh_text, system_dir, user_dir)
@@ -111,10 +158,10 @@ module Pinyin
   # ```
   # elements = Pinyin.to_pinyin_array("北京大学")
   # # => [
-  # #      Pinyin::Element(@text="北", @pinyin="bei"),
-  # #      Pinyin::Element(@text="京", @pinyin="jing"),
-  # #      Pinyin::Element(@text="大", @pinyin="da"),
-  # #      Pinyin::Element(@text="学", @pinyin="xue")
+  # #      Pinyin::Element(@text="北", @pinyin="běi"),
+  # #      Pinyin::Element(@text="京", @pinyin="jīng"),
+  # #      Pinyin::Element(@text="大", @pinyin="dà"),
+  # #      Pinyin::Element(@text="学", @pinyin="xué")
   # #    ]
   # ```
   def self.to_pinyin_array(zh_text : String, system_dir : String = @@system_dir, user_dir : String = @@user_dir) : Array(Element)
@@ -245,10 +292,10 @@ module Pinyin
               char_str = chars[k]?.try(&.to_s) || ""
 
               if LibPinyin.pinyin_get_pinyin_string(instance, key_ptr, out pinyin_str_ptr)
-                pinyin_str = String.new(pinyin_str_ptr)
+                syllable = String.new(pinyin_str_ptr)
                 LibGLib.g_free(pinyin_str_ptr.as(Void*))
-                pinyin_str_marked = get_tone_marked_pinyin(char_str, pinyin_str)
-                results << Element.new(char_str, pinyin_str_marked)
+                # syllable is toneless (e.g. "bei") — look up the tone and apply the mark
+                results << Element.new(char_str, toned_pinyin(char_str, syllable))
               else
                 results << Element.new(char_str, char_str)
               end
