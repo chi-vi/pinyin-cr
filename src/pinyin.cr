@@ -104,7 +104,7 @@ module Pinyin
     end
 
     # Fallback: use the first entry regardless of syllable match
-    first = entry.split(',').first
+    first = entry.split(',', 2).first
     if (colon = first.index(':'))
       syl = first[0...colon]
       tone = first[colon + 1]?.try(&.to_i) || 5
@@ -137,18 +137,7 @@ module Pinyin
   # Pinyin.to_pinyin("你好, World!") # => "nǐ hǎo , World!"
   # ```
   def self.to_pinyin(zh_text : String, separator : String = " ", system_dir : String = @@system_dir, user_dir : String = @@user_dir) : String
-    elements = to_pinyin_array(zh_text, system_dir, user_dir)
-    pinyin_results = [] of String
-
-    elements.each do |element|
-      pinyin_results << element.pinyin
-    end
-
-    joined = pinyin_results.join(separator)
-    if separator == " "
-      joined = joined.gsub(/\s+/, " ").strip
-    end
-    joined
+    to_pinyin_array(zh_text, system_dir, user_dir).join(separator, &.to_pinyin)
   end
 
   # Converts Chinese text into an array of Pinyin elements.
@@ -170,48 +159,20 @@ module Pinyin
 
     # Ensure user.conf exists to prevent libpinyin from printing "open ... failed." to stderr
     user_conf_path = File.join(user_dir, "user.conf")
-    unless File.exists?(user_conf_path)
-      File.write(user_conf_path, "")
-    end
+    File.write(user_conf_path, "") unless File.exists?(user_conf_path)
 
     context = LibPinyin.pinyin_init(system_dir, user_dir)
-    if context.nil?
-      raise PinyinError.new("Failed to initialize libpinyin context with system_dir: #{system_dir}")
-    end
+    raise PinyinError.new("Failed to initialize libpinyin context with system_dir: #{system_dir}") if context.nil?
 
     begin
       instance = LibPinyin.pinyin_alloc_instance(context)
-      if instance.nil?
-        raise PinyinError.new("Failed to allocate libpinyin instance")
-      end
+      raise PinyinError.new("Failed to allocate libpinyin instance") if instance.nil?
 
       begin
         pinyin_results = [] of Element
-        current_chunk = [] of Char
-        is_chinese = false
 
-        zh_text.each_char do |char|
-          char_is_chinese = chinese_char?(char)
-          if current_chunk.empty?
-            is_chinese = char_is_chinese
-            current_chunk << char
-          elsif char_is_chinese == is_chinese
-            current_chunk << char
-          else
-            chunk_str = current_chunk.join
-            if is_chinese
-              pinyin_results.concat(get_pinyin_elements(instance, chunk_str))
-            else
-              pinyin_results << Element.new(chunk_str, chunk_str)
-            end
-            current_chunk.clear
-            is_chinese = char_is_chinese
-            current_chunk << char
-          end
-        end
-
-        if !current_chunk.empty?
-          chunk_str = current_chunk.join
+        zh_text.chars.chunk { |c| chinese_char?(c) }.each do |is_chinese, chars|
+          chunk_str = chars.join
           if is_chinese
             pinyin_results.concat(get_pinyin_elements(instance, chunk_str))
           else
@@ -232,9 +193,7 @@ module Pinyin
   private def self.get_pinyin_elements(instance : LibPinyin::PinyinInstanceT, han_text : String) : Array(Element)
     # First attempt: segment the entire block
     LibPinyin.pinyin_reset(instance)
-    if LibPinyin.pinyin_phrase_segment(instance, han_text)
-      return extract_pinyin_elements_from_instance(instance)
-    end
+    return extract_pinyin_elements_from_instance(instance) if LibPinyin.pinyin_phrase_segment(instance, han_text)
 
     # Fallback: process character by character if the full phrase segmentation fails (e.g. rare characters)
     pinyins = [] of Element
@@ -259,13 +218,8 @@ module Pinyin
     end
 
     (0...num_phrases).each do |i|
-      unless LibPinyin.pinyin_get_phrase_token(instance, i, out token)
-        next
-      end
-
-      if token == 0 # null_token
-        next
-      end
+      next unless LibPinyin.pinyin_get_phrase_token(instance, i, out token)
+      next if token == 0 # null_token
 
       # Get the original phrase characters
       phrase_str = ""
@@ -274,46 +228,42 @@ module Pinyin
         LibGLib.g_free(phrase_str_ptr.as(Void*))
       end
 
-      if phrase_str.empty?
+      next if phrase_str.empty?
+
+      fallback = -> { phrase_str.each_char { |c| results << Element.new(c.to_s, c.to_s) } }
+
+      # Check if the token has any pronunciation
+      unless LibPinyin.pinyin_token_get_n_pronunciation(instance, token, out num_pron) && num_pron > 0
+        fallback.call
         next
       end
 
-      # Check if the token has any pronunciation
-      if LibPinyin.pinyin_token_get_n_pronunciation(instance, token, out num_pron) && num_pron > 0
-        keys_array = LibGLib.g_array_new(0, 0, 2)
-        begin
-          if LibPinyin.pinyin_token_get_nth_pronunciation(instance, token, 0, keys_array)
-            garray = keys_array.value
-            chewing_keys = garray.data.as(UInt16*)
+      keys_array = LibGLib.g_array_new(0, 0, 2)
+      begin
+        unless LibPinyin.pinyin_token_get_nth_pronunciation(instance, token, 0, keys_array)
+          fallback.call
+          next
+        end
 
-            chars = phrase_str.chars
-            (0...garray.len).each do |k|
-              key_ptr = chewing_keys + k
-              char_str = chars[k]?.try(&.to_s) || ""
+        garray = keys_array.value
+        chewing_keys = garray.data.as(UInt16*)
+        chars = phrase_str.chars
 
-              if LibPinyin.pinyin_get_pinyin_string(instance, key_ptr, out pinyin_str_ptr)
-                syllable = String.new(pinyin_str_ptr)
-                LibGLib.g_free(pinyin_str_ptr.as(Void*))
-                # syllable is toneless (e.g. "bei") — look up the tone and apply the mark
-                results << Element.new(char_str, toned_pinyin(char_str, syllable))
-              else
-                results << Element.new(char_str, char_str)
-              end
-            end
+        (0...garray.len).each do |k|
+          key_ptr = chewing_keys + k
+          char_str = chars[k]?.try(&.to_s) || ""
+
+          if LibPinyin.pinyin_get_pinyin_string(instance, key_ptr, out pinyin_str_ptr)
+            syllable = String.new(pinyin_str_ptr)
+            LibGLib.g_free(pinyin_str_ptr.as(Void*))
+            # syllable is toneless (e.g. "bei") — look up the tone and apply the mark
+            results << Element.new(char_str, toned_pinyin(char_str, syllable))
           else
-            # Fallback to raw characters without Pinyin if pronunciation retrieval failed
-            phrase_str.each_char do |c|
-              results << Element.new(c.to_s, c.to_s)
-            end
+            results << Element.new(char_str, char_str)
           end
-        ensure
-          LibGLib.g_array_free(keys_array, 1)
         end
-      else
-        # Fallback to characters if there are no pronunciations
-        phrase_str.each_char do |c|
-          results << Element.new(c.to_s, c.to_s)
-        end
+      ensure
+        LibGLib.g_array_free(keys_array, 1)
       end
     end
 
