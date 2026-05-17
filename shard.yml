@@ -1,0 +1,9 @@
+name: pinyin-cr
+version: 0.1.0
+
+authors:
+  - NPN <me@npn.am>
+
+crystal: '>= 1.21.0-dev'
+
+license: MIT
