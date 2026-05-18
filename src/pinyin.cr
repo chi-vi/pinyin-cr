@@ -137,7 +137,7 @@ module Pinyin
   # Pinyin.to_pinyin("你好, World!") # => "nǐ hǎo , World!"
   # ```
   def self.to_pinyin(zh_text : String, separator : String = " ", system_dir : String = @@system_dir, user_dir : String = @@user_dir) : String
-    to_pinyin_array(zh_text, system_dir, user_dir).join(separator, &.to_pinyin)
+    to_pinyin_array(zh_text, system_dir, user_dir).join(separator, &.pinyin)
   end
 
   # Converts Chinese text into an array of Pinyin elements.
