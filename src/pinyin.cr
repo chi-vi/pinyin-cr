@@ -30,6 +30,9 @@ module Pinyin
 
   # Lazily built lookup: codepoint → "syl:tone,syl:tone,..."
   @@tone_table : Hash(UInt32, String)? = nil
+  @@context_mutex = Mutex.new
+  @@contexts = Hash(Tuple(String, String), LibPinyin::PinyinContextT).new
+  @@context_finalizer_registered = false
 
   protected def self.tone_table : Hash(UInt32, String)
     @@tone_table ||= begin
@@ -42,6 +45,44 @@ module Pinyin
       end
       table
     end
+  end
+
+  protected def self.context_for(system_dir : String, user_dir : String) : LibPinyin::PinyinContextT
+    key = {system_dir, user_dir}
+
+    @@context_mutex.synchronize do
+      if context = @@contexts[key]?
+        return context
+      end
+
+      Dir.mkdir_p(user_dir) unless Dir.exists?(user_dir)
+
+      # Ensure user.conf exists to prevent libpinyin from printing "open ... failed." to stderr.
+      user_conf_path = File.join(user_dir, "user.conf")
+      File.write(user_conf_path, "") unless File.exists?(user_conf_path)
+
+      context = LibPinyin.pinyin_init(system_dir, user_dir)
+      raise PinyinError.new("Failed to initialize libpinyin context with system_dir: #{system_dir}") if context.null?
+
+      @@contexts[key] = context
+      register_context_finalizer
+      context
+    end
+  end
+
+  private def self.register_context_finalizer : Nil
+    return if @@context_finalizer_registered
+
+    at_exit do
+      @@context_mutex.synchronize do
+        @@contexts.each_value do |context|
+          LibPinyin.pinyin_fini(context)
+        end
+        @@contexts.clear
+      end
+    end
+
+    @@context_finalizer_registered = true
   end
 
   # Converts a syllable+tone-number string (e.g. "bei3", "lv4", "xue2") into a
@@ -154,38 +195,26 @@ module Pinyin
   # #    ]
   # ```
   def self.to_pinyin_array(zh_text : String, system_dir : String = @@system_dir, user_dir : String = @@user_dir) : Array(Element)
-    # Ensure user directory exists
-    Dir.mkdir_p(user_dir) unless Dir.exists?(user_dir)
+    context = context_for(system_dir, user_dir)
 
-    # Ensure user.conf exists to prevent libpinyin from printing "open ... failed." to stderr
-    user_conf_path = File.join(user_dir, "user.conf")
-    File.write(user_conf_path, "") unless File.exists?(user_conf_path)
-
-    context = LibPinyin.pinyin_init(system_dir, user_dir)
-    raise PinyinError.new("Failed to initialize libpinyin context with system_dir: #{system_dir}") if context.nil?
+    instance = LibPinyin.pinyin_alloc_instance(context)
+    raise PinyinError.new("Failed to allocate libpinyin instance") if instance.null?
 
     begin
-      instance = LibPinyin.pinyin_alloc_instance(context)
-      raise PinyinError.new("Failed to allocate libpinyin instance") if instance.nil?
+      pinyin_results = [] of Element
 
-      begin
-        pinyin_results = [] of Element
-
-        zh_text.chars.chunk { |c| chinese_char?(c) }.each do |is_chinese, chars|
-          chunk_str = chars.join
-          if is_chinese
-            pinyin_results.concat(get_pinyin_elements(instance, chunk_str))
-          else
-            pinyin_results << Element.new(chunk_str, chunk_str)
-          end
+      zh_text.chars.chunk { |c| chinese_char?(c) }.each do |is_chinese, chars|
+        chunk_str = chars.join
+        if is_chinese
+          pinyin_results.concat(get_pinyin_elements(instance, chunk_str))
+        else
+          pinyin_results << Element.new(chunk_str, chunk_str)
         end
-
-        return pinyin_results
-      ensure
-        LibPinyin.pinyin_free_instance(instance)
       end
+
+      return pinyin_results
     ensure
-      LibPinyin.pinyin_fini(context)
+      LibPinyin.pinyin_free_instance(instance)
     end
   end
 
